@@ -4,14 +4,17 @@ import (
 	"encoding/json"
 	"os/exec"
 	"os"
+	"net"
 	"time"
 	"fmt"
 )
 
-const CONFIG_PATH = "data.json"
+const CONFIG_PATH = "servdown.json"
 
-type PingData struct {
-	Server			string
+type ServData struct {
+	Host			string
+	Port			uint
+	Protocol		string//tcp/udp
 	TimeoutSec		uint
 	IntervalSec		uint
 	Successes		uint
@@ -19,45 +22,60 @@ type PingData struct {
 	UptimeRatio		string
 }
 
+func pingServer(host string, timeout uint) bool {
+	err := exec.Command("ping", host, "-c 1", fmt.Sprintf("-W %v", timeout)).Run()
+	return err != nil;
+}
+
+func testConn(host string, port uint, proto string, timeout time.Duration) bool {
+	conn, err := net.DialTimeout(proto, fmt.Sprintf("%v:%v", host, port), timeout)
+	if err == nil {
+		conn.Close()
+		return true
+	}
+	return false
+}
+
 func main(){
 
-	pingData := PingData{}
+	servData := ServData{}
 	file, err := os.OpenFile(CONFIG_PATH, os.O_RDWR, os.ModeAppend)
 	if os.IsNotExist(err) {
-		pingData = PingData{
-			Server:			"psilocyber.tech",
+		servData = ServData{
+			Host:			"psilocyber.tech",
+			Port:			80,
+			Protocol:		"tcp",
 			TimeoutSec:		3,
 			IntervalSec:	60,
 		}
 		fmt.Printf("ping data file '%s' does not exist, creating default one\n", CONFIG_PATH)
 		file, _ = os.Create(CONFIG_PATH)
-		bytes, _ := json.MarshalIndent(pingData, "", "\t")
+		bytes, _ := json.MarshalIndent(servData, "", "\t")
 		file.Write(bytes)
 	}
 
 	defer file.Close()
 	file.Seek(0, 0)
 	decoder := json.NewDecoder(file)
-	err = decoder.Decode(&pingData)
+	err = decoder.Decode(&servData)
 	if err != nil {
 		fmt.Printf("failed to parse ping data file '%s', err: %v\n", CONFIG_PATH, err.Error())
 		return
 	}
 
 	for {
-		err := exec.Command("ping", pingData.Server, "-c 1", fmt.Sprintf("-W %v", pingData.TimeoutSec)).Run()
-		if err == nil {
-			pingData.Successes++;
+		if testConn(servData.Host, servData.Port, servData.Protocol, time.Duration(servData.TimeoutSec) * time.Second) {
+			servData.Successes++;
 		} else {
-			pingData.Failures++;
+			servData.Failures++;
 		}
 
-		if pingData.Failures == 0 {
-			pingData.UptimeRatio = "100%"
+		if servData.Failures == 0 {
+			servData.UptimeRatio = "100%"
 		} else {
-			pingData.UptimeRatio = fmt.Sprintf("%v%%", (float32(pingData.Successes) / (float32(pingData.Successes) + float32(pingData.Failures))) * float32(100))
+			servData.UptimeRatio = fmt.Sprintf("%v%%", (float32(servData.Successes) / (float32(servData.Successes) + float32(servData.Failures))) * float32(100))
 		}
-		bytes, err := json.MarshalIndent(pingData, "", "\t")
+		bytes, err := json.MarshalIndent(servData, "", "\t")
 		
 		file.Truncate(0)
 		file.Seek(0, 0)
@@ -67,7 +85,7 @@ func main(){
 			return
 		}
 		file.Sync()
-		time.Sleep(time.Duration(pingData.IntervalSec) * time.Second)
+		time.Sleep(time.Duration(servData.IntervalSec) * time.Second)
 	}
 
 }
